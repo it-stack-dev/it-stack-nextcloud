@@ -1,0 +1,29 @@
+# Lab 01 — Standalone: Complete Nextcloud file sync, calendar, and office suite in isolation
+# No external dependencies required.
+---
+services:
+  nextcloud:
+    image: nextcloud:28-apache
+    container_name: it-stack-nextcloud
+    restart: unless-stopped
+    ports:
+      - "80:$firstPort"
+    environment:
+      - IT_STACK_ENV=lab-01-standalone
+    volumes:
+      - nextcloud_data:/var/lib/nextcloud
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - it-stack-net
+
+networks:
+  it-stack-net:
+    driver: bridge
+
+volumes:
+  nextcloud_data:

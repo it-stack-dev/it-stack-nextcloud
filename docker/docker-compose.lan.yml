@@ -1,0 +1,36 @@
+# Lab 02 — External Dependencies: nextcloud with external PostgreSQL and Redis
+---
+services:
+  nextcloud:
+    image: nextcloud:28-apache
+    container_name: it-stack-nextcloud
+    restart: unless-stopped
+    ports:
+      - "80:$firstPort"
+    environment:
+      - IT_STACK_ENV=lab-02-lan
+      - DB_HOST=
+      - DB_PORT=5432
+      - REDIS_HOST=
+    networks:
+      - it-stack-net
+
+  # Lightweight local DB for lab (replace with lab-db1 in real env)
+  postgres:
+    image: postgres:16
+    container_name: it-stack-nextcloud-db
+    environment:
+      POSTGRES_DB: nextcloud_db
+      POSTGRES_USER: nextcloud_user
+      POSTGRES_PASSWORD: nextcloud_pass
+    volumes:
+      - nextcloud_pg_data:/var/lib/postgresql/data
+    networks:
+      - it-stack-net
+
+networks:
+  it-stack-net:
+    driver: bridge
+
+volumes:
+  nextcloud_pg_data:
