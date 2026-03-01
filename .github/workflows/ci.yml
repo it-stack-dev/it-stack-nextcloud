@@ -103,3 +103,40 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker compose -f docker/docker-compose.standalone.yml down -v
+
+  lab-02-smoke:
+    name: Lab 02 — Nextcloud LAN (PG, Redis, pgsql backend, Redis config)
+    runs-on: ubuntu-latest
+    needs: validate
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get install -y curl
+
+      - name: Validate LAN compose
+        run: docker compose -f docker/docker-compose.lan.yml config -q && echo "LAN compose valid"
+
+      - name: Start LAN stack
+        run: docker compose -f docker/docker-compose.lan.yml up -d
+
+      - name: Wait for PostgreSQL
+        run: timeout 60 bash -c 'until docker compose -f docker/docker-compose.lan.yml exec -T db pg_isready -U ncuser -d nextcloud; do sleep 3; done'
+
+      - name: Wait for Redis
+        run: timeout 30 bash -c 'until docker compose -f docker/docker-compose.lan.yml exec -T redis redis-cli -a Lab02Redis! ping | grep -q PONG; do sleep 2; done'
+
+      - name: Wait for Nextcloud (PG first-boot ~3 min)
+        run: timeout 360 bash -c 'until curl -sf http://localhost:8080/status.php | grep -q "\"installed\":true"; do sleep 10; done'
+
+      - name: Run Lab 06-02 test script
+        run: bash tests/labs/test-lab-06-02.sh
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.lan.yml logs
+
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker/docker-compose.lan.yml down -v
