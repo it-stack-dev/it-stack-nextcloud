@@ -1,53 +1,236 @@
-# Lab 06 — Production: nextcloud HA-ready with monitoring and external volumes
----
+# docker-compose.production.yml -- Lab 06: Production Deployment
+# Nextcloud + PostgreSQL + Redis + Keycloak + OpenLDAP — Production Grade
+# Features: resource limits, restart=always, log rotation, persistent volumes,
+#            Prometheus metrics, PHP tuning, cron worker, LDAP + OIDC auth
+#
+# Ports:
+#   8200 -- Nextcloud HTTP
+#   8204 -- Keycloak admin console
+#   3895 -- OpenLDAP
+#
+# Credentials:
+#   LDAP admin:    cn=admin,dc=lab,dc=local / LdapProd06!
+#   LDAP readonly: cn=readonly,dc=lab,dc=local / ReadOnlyProd06!
+#   DB:            nextcloud / Prod06Password!
+#   Redis:         Prod06Redis!
+#   Keycloak:      admin / Prod06Admin!
+#   OIDC secret:   nextcloud-prod-06
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+x-nc-prod-env: &nc-prod-env
+  POSTGRES_HOST: nc-prod-db
+  POSTGRES_DB: nextcloud
+  POSTGRES_USER: nextcloud
+  POSTGRES_PASSWORD: Prod06Password!
+  REDIS_HOST: nc-prod-redis
+  REDIS_HOST_PASSWORD: Prod06Redis!
+  NEXTCLOUD_TRUSTED_DOMAINS: "localhost nc-prod-app"
+  PHP_MEMORY_LIMIT: 1024M
+  PHP_UPLOAD_LIMIT: 512M
+  PHP_MAX_TIME: 3600
+  NC_oidc_login_provider_url: http://nc-prod-keycloak:8080/realms/it-stack
+  NC_oidc_login_client_id: nextcloud
+  NC_oidc_login_client_secret: nextcloud-prod-06
+  NC_oidc_login_button_text: Login with Keycloak
+  NC_oidc_login_auto_redirect: "false"
+  LDAP_PROVIDER_HOST: nc-prod-ldap
+  LDAP_PROVIDER_PORT: "389"
+  LDAP_PROVIDER_BINDDN: "cn=readonly,dc=lab,dc=local"
+  LDAP_PROVIDER_BINDPASS: ReadOnlyProd06!
+  LDAP_PROVIDER_BASEDN: "dc=lab,dc=local"
+
 services:
-  nextcloud:
-    image: nextcloud:28-apache
-    container_name: it-stack-nextcloud
+  nc-prod-ldap:
+    image: osixia/openldap:1.5.0
+    container_name: nc-prod-ldap
     restart: always
-    ports:
-      - "80:$firstPort"
     environment:
-      - IT_STACK_ENV=production
-      - KEYCLOAK_URL=
-      - DB_HOST=
-      - REDIS_HOST=
-      - GRAYLOG_HOST=
+      LDAP_ORGANISATION: "IT-Stack Production"
+      LDAP_DOMAIN: lab.local
+      LDAP_ADMIN_PASSWORD: LdapProd06!
+      LDAP_READONLY_USER: "true"
+      LDAP_READONLY_USER_USERNAME: readonly
+      LDAP_READONLY_USER_PASSWORD: ReadOnlyProd06!
+    ports:
+      - "3895:389"
     volumes:
-      - nextcloud_data:/var/lib/nextcloud
-      - /etc/ssl/certs:/etc/ssl/certs:ro
+      - nc-prod-ldap-data:/var/lib/ldap
+      - nc-prod-ldap-config:/etc/ldap/slapd.d
+    networks:
+      - nc-prod-net
     deploy:
-      replicas: 1
       resources:
         limits:
-          cpus: "4.0"
-          memory: G
+          memory: 256m
+          cpus: "0.5"
         reservations:
-          cpus: "1.0"
-          memory: 1G
-      restart_policy:
-        condition: any
-        delay: 5s
-    logging:
-      driver: gelf
-      options:
-        gelf-address: "udp://${GRAYLOG_HOST}:12201"
-        tag: "it-stack-nextcloud"
+          memory: 128m
+    logging: *default-logging
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
-      interval: 30s
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=lab,dc=local -D cn=admin,dc=lab,dc=local -w LdapProd06! > /dev/null 2>&1"]
+      interval: 15s
       timeout: 10s
-      retries: 3
-      start_period: 120s
-    networks:
-      - it-stack-net
+      retries: 5
+      start_period: 20s
 
-networks:
-  it-stack-net:
-    external: true
-    name: it-stack-production
+  nc-prod-db:
+    image: postgres:16-alpine
+    container_name: nc-prod-db
+    restart: always
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: Prod06Password!
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - nc-prod-db-data:/var/lib/postgresql/data
+    networks:
+      - nc-prod-db-net
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+        reservations:
+          memory: 256m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextcloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nc-prod-redis:
+    image: redis:7-alpine
+    container_name: nc-prod-redis
+    restart: always
+    command: >
+      redis-server
+      --requirepass Prod06Redis!
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+    volumes:
+      - nc-prod-redis-data:/data
+    networks:
+      - nc-prod-net
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+        reservations:
+          memory: 128m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "Prod06Redis!", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nc-prod-keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: nc-prod-keycloak
+    restart: always
+    command: start-dev
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: Prod06Admin!
+    ports:
+      - "8204:8080"
+    networks:
+      - nc-prod-net
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+        reservations:
+          memory: 512m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready | grep -q UP || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  nc-prod-app:
+    image: nextcloud:29-apache
+    container_name: nc-prod-app
+    restart: always
+    depends_on:
+      nc-prod-db:
+        condition: service_healthy
+      nc-prod-redis:
+        condition: service_healthy
+      nc-prod-keycloak:
+        condition: service_healthy
+      nc-prod-ldap:
+        condition: service_healthy
+    environment:
+      <<: *nc-prod-env
+    ports:
+      - "8200:80"
+    volumes:
+      - nc-prod-data:/var/www/html
+    networks:
+      - nc-prod-net
+      - nc-prod-db-net
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"
+        reservations:
+          memory: 512m
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/status.php"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 90s
+
+  nc-prod-cron:
+    image: nextcloud:29-apache
+    container_name: nc-prod-cron
+    restart: always
+    depends_on:
+      nc-prod-app:
+        condition: service_healthy
+    entrypoint: /cron.sh
+    environment:
+      <<: *nc-prod-env
+    volumes:
+      - nc-prod-data:/var/www/html
+    networks:
+      - nc-prod-net
+      - nc-prod-db-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+        reservations:
+          memory: 128m
+    logging: *default-logging
 
 volumes:
-  nextcloud_data:
-    external: true
-    name: it-stack-nextcloud-data
+  nc-prod-ldap-data:
+  nc-prod-ldap-config:
+  nc-prod-db-data:
+  nc-prod-redis-data:
+  nc-prod-data:
+
+networks:
+  nc-prod-net:
+  nc-prod-db-net:
