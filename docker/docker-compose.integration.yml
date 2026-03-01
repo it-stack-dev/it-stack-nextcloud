@@ -1,26 +1,156 @@
-# Lab 05 — Advanced Integration: nextcloud with full IT-Stack ecosystem
----
+# docker-compose.integration.yml -- Lab 05: Advanced Integration
+# Nextcloud + OpenLDAP (FreeIPA sim) + PostgreSQL + Redis + Keycloak
+# Lab 05 tests: LDAP user auth, OIDC SSO, Redis sessions, cron worker, WebDAV
+#
+# Ports:
+#   8100 -- Nextcloud HTTP
+#   8104 -- Keycloak admin console
+#   3890 -- OpenLDAP
+#
+# Credentials:
+#   LDAP admin:    cn=admin,dc=lab,dc=local / LdapAdmin05!
+#   LDAP readonly: cn=readonly,dc=lab,dc=local / ReadOnly05!
+#   DB:            nextcloud / Lab05Password!
+#   Redis:         Lab05Redis!
+#   Keycloak:      admin / Lab05Admin!
+#   OIDC secret:   nextcloud-secret-05
+
+x-nc-int-env: &nc-int-env
+  POSTGRES_HOST: nc-int-db
+  POSTGRES_DB: nextcloud
+  POSTGRES_USER: nextcloud
+  POSTGRES_PASSWORD: Lab05Password!
+  REDIS_HOST: nc-int-redis
+  REDIS_HOST_PASSWORD: Lab05Redis!
+  NEXTCLOUD_TRUSTED_DOMAINS: "localhost nc-int-app"
+  NC_oidc_login_provider_url: http://nc-int-keycloak:8080/realms/it-stack
+  NC_oidc_login_client_id: nextcloud
+  NC_oidc_login_client_secret: nextcloud-secret-05
+  NC_oidc_login_button_text: Login with Keycloak
+  NC_oidc_login_auto_redirect: "false"
+  LDAP_PROVIDER_HOST: nc-int-ldap
+  LDAP_PROVIDER_PORT: "389"
+  LDAP_PROVIDER_BINDDN: "cn=readonly,dc=lab,dc=local"
+  LDAP_PROVIDER_BINDPASS: ReadOnly05!
+  LDAP_PROVIDER_BASEDN: "dc=lab,dc=local"
+
 services:
-  nextcloud:
-    image: nextcloud:28-apache
-    container_name: it-stack-nextcloud
-    restart: unless-stopped
-    ports:
-      - "80:$firstPort"
+  nc-int-ldap:
+    image: osixia/openldap:1.5.0
+    container_name: nc-int-ldap
     environment:
-      - IT_STACK_ENV=lab-05-integration
-      - KEYCLOAK_URL=
-      - DB_HOST=
-      - REDIS_HOST=
-      - SMTP_HOST=
-      - GRAYLOG_HOST=
-    extra_hosts:
-      - "lab-id1:10.0.50.11"
-      - "lab-db1:10.0.50.12"
-      - "lab-proxy1:10.0.50.15"
+      LDAP_ORGANISATION: "IT-Stack Lab"
+      LDAP_DOMAIN: lab.local
+      LDAP_ADMIN_PASSWORD: LdapAdmin05!
+      LDAP_READONLY_USER: "true"
+      LDAP_READONLY_USER_USERNAME: readonly
+      LDAP_READONLY_USER_PASSWORD: ReadOnly05!
+    ports:
+      - "3890:389"
     networks:
-      - it-stack-net
+      - nc-int-net
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=lab,dc=local -D cn=admin,dc=lab,dc=local -w LdapAdmin05! > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  nc-int-db:
+    image: postgres:16-alpine
+    container_name: nc-int-db
+    environment:
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: nextcloud
+      POSTGRES_PASSWORD: Lab05Password!
+    volumes:
+      - nc-int-db-data:/var/lib/postgresql/data
+    networks:
+      - nc-int-db-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nextcloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nc-int-redis:
+    image: redis:7-alpine
+    container_name: nc-int-redis
+    command: redis-server --requirepass Lab05Redis!
+    networks:
+      - nc-int-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "Lab05Redis!", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  nc-int-keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: nc-int-keycloak
+    command: start-dev
+    environment:
+      KC_HEALTH_ENABLED: "true"
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: Lab05Admin!
+    ports:
+      - "8104:8080"
+    networks:
+      - nc-int-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready | grep -q UP || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  nc-int-app:
+    image: nextcloud:29-apache
+    container_name: nc-int-app
+    depends_on:
+      nc-int-db:
+        condition: service_healthy
+      nc-int-redis:
+        condition: service_healthy
+      nc-int-keycloak:
+        condition: service_healthy
+      nc-int-ldap:
+        condition: service_healthy
+    environment:
+      <<: *nc-int-env
+    ports:
+      - "8100:80"
+    volumes:
+      - nc-int-data:/var/www/html
+    networks:
+      - nc-int-net
+      - nc-int-db-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/status.php"]
+      interval: 30s
+      timeout: 15s
+      retries: 10
+      start_period: 90s
+
+  nc-int-cron:
+    image: nextcloud:29-apache
+    container_name: nc-int-cron
+    depends_on:
+      nc-int-app:
+        condition: service_healthy
+    entrypoint: /cron.sh
+    environment:
+      <<: *nc-int-env
+    volumes:
+      - nc-int-data:/var/www/html
+    networks:
+      - nc-int-net
+      - nc-int-db-net
+
+volumes:
+  nc-int-db-data:
+  nc-int-data:
 
 networks:
-  it-stack-net:
-    driver: bridge
+  nc-int-net:
+  nc-int-db-net:
