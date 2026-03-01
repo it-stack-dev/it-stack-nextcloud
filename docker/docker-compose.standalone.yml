@@ -1,29 +1,37 @@
-# Lab 01 — Standalone: Complete Nextcloud file sync, calendar, and office suite in isolation
-# No external dependencies required.
+# Lab 01 — Standalone: Nextcloud file sync, calendar, and office suite
+# Self-contained — uses SQLite (auto). No PostgreSQL or Redis required.
+# Access: http://localhost:8080  Admin: admin / Lab01Password!
 ---
 services:
   nextcloud:
-    image: nextcloud:28-apache
-    container_name: it-stack-nextcloud
+    image: nextcloud:29-apache
+    container_name: it-stack-nextcloud-standalone
     restart: unless-stopped
     ports:
-      - "80:$firstPort"
+      - "8080:80"
     environment:
-      - IT_STACK_ENV=lab-01-standalone
+      NEXTCLOUD_ADMIN_USER: admin
+      NEXTCLOUD_ADMIN_PASSWORD: Lab01Password!
+      NEXTCLOUD_TRUSTED_DOMAINS: "localhost 127.0.0.1"
     volumes:
-      - nextcloud_data:/var/lib/nextcloud
+      - nextcloud-standalone-data:/var/www/html
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost/status.php | grep -q '\"installed\":true' || exit 1"]
       interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      timeout: 15s
+      retries: 12
+      start_period: 120s
     networks:
-      - it-stack-net
+      - nextcloud-standalone-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
 
 networks:
-  it-stack-net:
+  nextcloud-standalone-net:
     driver: bridge
 
 volumes:
-  nextcloud_data:
+  nextcloud-standalone-data:
+    driver: local

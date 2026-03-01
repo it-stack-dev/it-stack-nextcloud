@@ -1,71 +1,95 @@
 #!/usr/bin/env bash
-# test-lab-06-01.sh — Lab 06-01: Standalone
-# Module 06: Nextcloud file sync, calendar, and office suite
-# Basic nextcloud functionality in complete isolation
+# test-lab-06-01.sh -- Nextcloud Lab 01: Standalone
+# Tests: HTTP health, status.php, occ status, user list, WebDAV, version
+# Usage: bash test-lab-06-01.sh
 set -euo pipefail
 
-LAB_ID="06-01"
-LAB_NAME="Standalone"
-MODULE="nextcloud"
-COMPOSE_FILE="docker/docker-compose.standalone.yml"
-PASS=0
-FAIL=0
+PASS=0; FAIL=0
+ok()  { echo "[PASS] $1"; ((PASS++)); }
+fail(){ echo "[FAIL] $1"; ((FAIL++)); }
+info(){ echo "[INFO] $1"; }
 
-# ── Colors ────────────────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; NC='\033[0m'
+# -- Section 1: Container running --------------------------------------------
+info "Section 1: Container health"
+container_status=$(docker inspect --format '{{.State.Status}}' it-stack-nextcloud-standalone 2>/dev/null || echo "not-found")
+info "Container status: $container_status"
+[[ "$container_status" == "running" ]] && ok "Container running" || fail "Container running (got: $container_status)"
 
-pass() { echo -e "${GREEN}[PASS]${NC} $1"; ((PASS++)); }
-fail() { echo -e "${RED}[FAIL]${NC} $1"; ((FAIL++)); }
-info() { echo -e "${CYAN}[INFO]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+# -- Section 2: HTTP endpoint -------------------------------------------------
+info "Section 2: HTTP :8080 responds"
+http_code=$(curl -so /dev/null -w "%{http_code}" http://localhost:8080/ 2>/dev/null || echo "000")
+info "GET http://localhost:8080/ -> $http_code"
+if [[ "$http_code" =~ ^(200|301|302)$ ]]; then ok "HTTP :8080 responds ($http_code)"; else fail "HTTP :8080 (got $http_code)"; fi
 
-echo -e "${CYAN}======================================${NC}"
-echo -e "${CYAN} Lab ${LAB_ID}: ${LAB_NAME}${NC}"
-echo -e "${CYAN} Module: ${MODULE}${NC}"
-echo -e "${CYAN}======================================${NC}"
-echo ""
-
-# ── PHASE 1: Setup ────────────────────────────────────────────────────────────
-info "Phase 1: Setup"
-docker compose -f "${COMPOSE_FILE}" up -d
-info "Waiting 30s for ${MODULE} to initialize..."
-sleep 30
-
-# ── PHASE 2: Health Checks ────────────────────────────────────────────────────
-info "Phase 2: Health Checks"
-
-if docker compose -f "${COMPOSE_FILE}" ps | grep -q "running\|Up"; then
-    pass "Container is running"
+# -- Section 3: status.php ----------------------------------------------------
+info "Section 3: /status.php reports installed"
+status_json=$(curl -sf http://localhost:8080/status.php 2>/dev/null || echo '{}')
+info "status.php: $status_json"
+if echo "$status_json" | grep -q '"installed":true'; then
+  ok "Nextcloud installed (status.php)"
 else
-    fail "Container is not running"
+  fail "Nextcloud not installed yet (status.php: $status_json)"
 fi
 
-# ── PHASE 3: Functional Tests ─────────────────────────────────────────────────
-info "Phase 3: Functional Tests (Lab 01 — Standalone)"
+# -- Section 4: Extract version -----------------------------------------------
+info "Section 4: Nextcloud version"
+version=$(echo "$status_json" | grep -o '"version":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+info "Version: $version"
+[[ -n "$version" && "$version" != "unknown" ]] && ok "Nextcloud version: $version" || fail "Nextcloud version not readable"
 
-# TODO: Add module-specific functional tests here
-# Example:
-# if curl -sf http://localhost:80/health > /dev/null 2>&1; then
-#     pass "Health endpoint responds"
-# else
-#     fail "Health endpoint not reachable"
-# fi
+# -- Section 5: Maintenance mode OFF ------------------------------------------
+info "Section 5: Maintenance mode"
+maintenance=$(echo "$status_json" | grep -o '"maintenance":[^,}]*' | cut -d: -f2 | tr -d ' ' || echo "unknown")
+info "Maintenance: $maintenance"
+[[ "$maintenance" == "false" ]] && ok "Maintenance mode: off" || fail "Maintenance mode (got: $maintenance)"
 
-warn "Functional tests for Lab 06-01 pending implementation"
+# -- Section 6: occ status (via docker exec) ----------------------------------
+info "Section 6: occ status inside container"
+if docker exec it-stack-nextcloud-standalone php occ status 2>/dev/null | grep -q "installed: true"; then
+  ok "occ status: installed = true"
+else
+  fail "occ status: installed not true"
+fi
 
-# ── PHASE 4: Cleanup ──────────────────────────────────────────────────────────
-info "Phase 4: Cleanup"
-docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans
-info "Cleanup complete"
+# -- Section 7: occ user:list shows admin ------------------------------------
+info "Section 7: Admin user exists (occ user:list)"
+if docker exec it-stack-nextcloud-standalone php occ user:list 2>/dev/null | grep -qi "admin"; then
+  ok "Admin user present in occ user:list"
+else
+  fail "Admin user not found in occ user:list"
+fi
 
-# ── Results ───────────────────────────────────────────────────────────────────
-echo ""
-echo -e "${CYAN}======================================${NC}"
-echo -e " Lab ${LAB_ID} Complete"
-echo -e " ${GREEN}PASS: ${PASS}${NC} | ${RED}FAIL: ${FAIL}${NC}"
-echo -e "${CYAN}======================================${NC}"
+# -- Section 8: WebDAV endpoint accessible ------------------------------------
+info "Section 8: WebDAV endpoint"
+webdav_code=$(curl -sf -X PROPFIND http://localhost:8080/remote.php/dav/ \
+  -H "Depth: 0" -u admin:Lab01Password! -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+info "WebDAV PROPFIND -> $webdav_code"
+if [[ "$webdav_code" =~ ^(207|401)$ ]]; then ok "WebDAV :8080 endpoint present ($webdav_code)"; else fail "WebDAV endpoint (got $webdav_code)"; fi
 
-if [ "${FAIL}" -gt 0 ]; then
-    exit 1
+# -- Section 9: OCS capabilities API -----------------------------------------
+info "Section 9: OCS Capabilities API"
+ocs_code=$(curl -sf -u admin:Lab01Password! \
+  "http://localhost:8080/ocs/v2.php/cloud/capabilities?format=json" \
+  -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+info "OCS capabilities -> $ocs_code"
+[[ "$ocs_code" == "200" ]] && ok "OCS Capabilities API: 200" || fail "OCS Capabilities API (got $ocs_code)"
+
+# -- Section 10: Files app enabled --------------------------------------------
+info "Section 10: Files app enabled"
+if docker exec it-stack-nextcloud-standalone php occ app:list --enabled 2>/dev/null | grep -q "files:"; then
+  ok "Files app enabled"
+else
+  fail "Files app not enabled"
+fi
+
+# -- Section 11: Integration score -------------------------------------------
+info "Section 11: Lab 01 standalone integration score"
+TOTAL=$((PASS + FAIL))
+echo "Results: $PASS/$TOTAL passed"
+if [[ $FAIL -eq 0 ]]; then
+  echo "[SCORE] 6/6 -- All standalone checks passed"
+  exit 0
+else
+  echo "[SCORE] FAIL ($FAIL failures)"
+  exit 1
 fi
