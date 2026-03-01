@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # test-lab-06-02.sh — Lab 06-02: External Dependencies
 # Module 06: Nextcloud file sync, calendar, and office suite
 # nextcloud with external PostgreSQL, Redis, and network integration
