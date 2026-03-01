@@ -1,34 +1,120 @@
-# Lab 03 — Advanced Features: nextcloud with TLS, resource limits, logging
----
+# docker-compose.advanced.yml — Lab 06-03: Advanced Features
+# Nextcloud with PostgreSQL, Redis (tuned), cron worker, and resource limits
+name: nextcloud-advanced
+
+x-nc-env: &nc-env
+  POSTGRES_HOST: db
+  POSTGRES_DB: nextcloud
+  POSTGRES_USER: ncuser
+  POSTGRES_PASSWORD: Lab03Password!
+  REDIS_HOST: redis
+  REDIS_HOST_PASSWORD: Lab03Redis!
+  REDIS_HOST_PORT: 6379
+  NEXTCLOUD_ADMIN_USER: admin
+  NEXTCLOUD_ADMIN_PASSWORD: Lab03Admin!
+  NEXTCLOUD_TRUSTED_DOMAINS: "localhost"
+  NEXTCLOUD_TRUSTED_PROXIES: "172.16.0.0/12 10.0.0.0/8"
+  PHP_MEMORY_LIMIT: 512M
+  PHP_UPLOAD_LIMIT: 512M
+  NC_default_phone_region: US
+
 services:
-  nextcloud:
-    image: nextcloud:28-apache
-    container_name: it-stack-nextcloud
-    restart: unless-stopped
-    ports:
-      - "80:$firstPort"
+  db:
+    image: postgres:16-alpine
+    container_name: nc-adv-db
     environment:
-      - IT_STACK_ENV=lab-03-advanced
-      - TLS_ENABLED=true
+      POSTGRES_DB: nextcloud
+      POSTGRES_USER: ncuser
+      POSTGRES_PASSWORD: Lab03Password!
     volumes:
-      - nextcloud_data:/var/lib/nextcloud
-      - ./certs:/etc/ssl/certs:ro
+      - nc_adv_db:/var/lib/postgresql/data
+    networks:
+      - nc-db-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ncuser -d nextcloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: G
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
-    networks:
-      - it-stack-net
+          cpus: "0.5"
+          memory: 512M
+    restart: unless-stopped
 
-networks:
-  it-stack-net:
-    driver: bridge
+  redis:
+    image: redis:7-alpine
+    container_name: nc-adv-redis
+    command: >
+      redis-server
+      --requirepass Lab03Redis!
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    networks:
+      - nc-app-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 320M
+    restart: unless-stopped
+
+  nextcloud:
+    image: nextcloud:29-apache
+    container_name: nc-adv-app
+    ports:
+      - "8080:80"
+    environment:
+      <<: *nc-env
+    volumes:
+      - nc_adv_data:/var/www/html
+    networks:
+      - nc-app-net
+      - nc-db-net
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/status.php | grep -q '\"installed\":true'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    restart: unless-stopped
+
+  cron:
+    image: nextcloud:29-apache
+    container_name: nc-adv-cron
+    entrypoint: /cron.sh
+    environment:
+      <<: *nc-env
+    volumes:
+      - nc_adv_data:/var/www/html
+    networks:
+      - nc-app-net
+      - nc-db-net
+    depends_on:
+      - nextcloud
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    restart: unless-stopped
 
 volumes:
-  nextcloud_data:
+  nc_adv_db:
+  nc_adv_data:
+
+networks:
+  nc-app-net:
+  nc-db-net:
