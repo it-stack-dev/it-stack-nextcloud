@@ -85,10 +85,40 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── LDAP seed: applies FreeIPA-like LDIF after OpenLDAP is ready ──────────
+  nc-int-ldap-seed:
+    image: osixia/openldap:1.5.0
+    container_name: nc-int-ldap-seed
+    depends_on:
+      nc-int-ldap:
+        condition: service_healthy
+    networks:
+      - nc-int-net
+    volumes:
+      - ./nextcloud-ldap-seed.ldif:/seed/nextcloud-ldap-seed.ldif:ro
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        if ldapsearch -x -H ldap://nc-int-ldap:389 \
+             -D "cn=admin,dc=lab,dc=local" -w "LdapAdmin05!" \
+             -b "cn=accounts,dc=lab,dc=local" -s base dn 2>/dev/null | grep -q 'cn=accounts'; then
+          echo "[seed] Already seeded — skipping."
+        else
+          echo "[seed] Seeding FreeIPA-like structure for Nextcloud..."
+          ldapadd -x -H ldap://nc-int-ldap:389 \
+            -D "cn=admin,dc=lab,dc=local" -w "LdapAdmin05!" \
+            -f /seed/nextcloud-ldap-seed.ldif && echo "[seed] Done."
+        fi
+    restart: "no"
+
   nc-int-keycloak:
     image: quay.io/keycloak/keycloak:24.0
     container_name: nc-int-keycloak
     command: start-dev
+    depends_on:
+      nc-int-ldap-seed:
+        condition: service_completed_successfully
     environment:
       KC_HEALTH_ENABLED: "true"
       KEYCLOAK_ADMIN: admin

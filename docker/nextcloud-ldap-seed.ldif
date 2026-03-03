@@ -1,0 +1,88 @@
+# nextcloud-ldap-seed.ldif
+# Seeds FreeIPA-compatible LDAP structure into the OpenLDAP integration test
+# container for the Nextcloud Lab 05 integration test.
+#
+# Used by: docker/docker-compose.integration.yml → nc-int-ldap-seed service
+# Nextcloud LDAP app maps to: dc=lab,dc=local
+# Keycloak federation maps to: cn=users,cn=accounts,dc=lab,dc=local (rhds vendor)
+
+# ── FreeIPA-compatible accounts container ─────────────────────────────────────
+dn: cn=accounts,dc=lab,dc=local
+objectClass: organizationalRole
+objectClass: top
+cn: accounts
+description: FreeIPA-compatible accounts container
+
+dn: cn=users,cn=accounts,dc=lab,dc=local
+objectClass: organizationalRole
+objectClass: top
+cn: users
+description: IPA user accounts
+
+dn: cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: organizationalRole
+objectClass: top
+cn: groups
+description: IPA user groups
+
+# ── Test users ────────────────────────────────────────────────────────────────
+dn: uid=ncadmin,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+uid: ncadmin
+cn: Nextcloud Admin
+sn: Admin
+givenName: Nextcloud
+displayName: Nextcloud Admin
+mail: ncadmin@lab.local
+telephoneNumber: +1-555-100-0001
+title: Cloud Administrator
+userPassword: Lab05Password!
+
+dn: uid=ncuser1,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+uid: ncuser1
+cn: NC User One
+sn: One
+givenName: NC
+displayName: NC User One
+mail: ncuser1@lab.local
+telephoneNumber: +1-555-100-0002
+title: Engineer
+userPassword: Lab05Password!
+
+dn: uid=ncuser2,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+uid: ncuser2
+cn: NC User Two
+sn: Two
+givenName: NC
+displayName: NC User Two
+mail: ncuser2@lab.local
+telephoneNumber: +1-555-100-0003
+title: Analyst
+userPassword: Lab05Password!
+
+# ── Groups ────────────────────────────────────────────────────────────────────
+dn: cn=admins,cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: groupOfNames
+objectClass: top
+cn: admins
+description: Nextcloud administrators
+member: uid=ncadmin,cn=users,cn=accounts,dc=lab,dc=local
+
+dn: cn=nc-users,cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: groupOfNames
+objectClass: top
+cn: nc-users
+description: Nextcloud regular users
+member: uid=ncuser1,cn=users,cn=accounts,dc=lab,dc=local
+member: uid=ncuser2,cn=users,cn=accounts,dc=lab,dc=local
