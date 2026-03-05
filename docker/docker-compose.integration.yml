@@ -1,11 +1,13 @@
 # docker-compose.integration.yml -- Lab 05: Advanced Integration
-# Nextcloud + OpenLDAP (FreeIPA sim) + PostgreSQL + Redis + Keycloak
-# Lab 05 tests: LDAP user auth, OIDC SSO, Redis sessions, cron worker, WebDAV
+# Nextcloud + OpenLDAP (FreeIPA sim) + PostgreSQL + Redis + Keycloak + WireMock
+# Lab 05 tests: LDAP user auth, OIDC SSO, Redis sessions, cron worker, WebDAV,
+#               INT-13 SuiteCRM CalDAV mock
 #
 # Ports:
 #   8100 -- Nextcloud HTTP
 #   8104 -- Keycloak admin console
 #   3890 -- OpenLDAP
+#   8105 -- WireMock (SuiteCRM stub for INT-13)
 #
 # Credentials:
 #   LDAP admin:    cn=admin,dc=lab,dc=local / LdapAdmin05!
@@ -33,6 +35,10 @@ x-nc-int-env: &nc-int-env
   LDAP_PROVIDER_BINDDN: "cn=readonly,dc=lab,dc=local"
   LDAP_PROVIDER_BINDPASS: ReadOnly05!
   LDAP_PROVIDER_BASEDN: "dc=lab,dc=local"
+  # INT-13: SuiteCRM CalDAV sync (via WireMock)
+  SUITECRM_URL: http://nc-int-mock:8080
+  SUITECRM_CALDAV_USER: admin
+  SUITECRM_CALDAV_PATH: /remote.php/dav/calendars/admin
 
 services:
   nc-int-ldap:
@@ -176,6 +182,21 @@ services:
     networks:
       - nc-int-net
       - nc-int-db-net
+
+  # INT-13: WireMock — simulates SuiteCRM CalDAV endpoint for Nextcloud tests
+  nc-int-mock:
+    image: wiremock/wiremock:3.5.2
+    container_name: nc-int-mock
+    command: ["--port", "8080", "--global-response-templating", "--verbose"]
+    ports:
+      - "8105:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/__admin/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - nc-int-net
 
 volumes:
   nc-int-db-data:

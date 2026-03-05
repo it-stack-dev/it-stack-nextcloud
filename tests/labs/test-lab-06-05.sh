@@ -284,6 +284,47 @@ HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
   && pass "WebDAV PROPFIND returns 207" \
   || fail "WebDAV PROPFIND returned $HTTP"
 
+section "13. INT-13 SuiteCRM CalDAV WireMock (SuiteCRM ↔ Nextcloud)"
+# WireMock health check (port 8105)
+WM_HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+  "http://localhost:8105/__admin/health" 2>/dev/null || echo "000")
+[[ "$WM_HTTP" == "200" ]] \
+  && pass "INT-13: WireMock (nc-int-mock) healthy on port 8105" \
+  || fail "INT-13: WireMock not responding on port 8105 (HTTP $WM_HTTP)"
+
+# Register SuiteCRM CalDAV PUT stub
+STUB_HTTP=$(curl -sf -o /dev/null -w "%{http_code}" \
+  -X POST "http://localhost:8105/__admin/mappings" \
+  -H "Content-Type: application/json" \
+  -d '{"request":{"method":"PUT","urlPattern":"/remote.php/dav/calendars/.*\\.ics"},
+       "response":{"status":201,"headers":{"Content-Type":"text/plain"},"body":"Created"}}' \
+  2>/dev/null || echo "000")
+[[ "$STUB_HTTP" == "201" ]] \
+  && pass "INT-13: WireMock CalDAV PUT stub registered" \
+  || fail "INT-13: WireMock CalDAV PUT stub registration failed (HTTP $STUB_HTTP)"
+
+# Nextcloud CalDAV PROPFIND returns 207 (confirming own endpoint)
+NC_CALDAV=$(curl -s -o /dev/null -w "%{http_code}" \
+  -X PROPFIND "http://localhost:${NC_PORT}/remote.php/dav/" \
+  -H "Depth: 0")
+[[ "$NC_CALDAV" == "207" ]] \
+  && pass "INT-13: Nextcloud CalDAV PROPFIND returns 207" \
+  || fail "INT-13: Nextcloud CalDAV PROPFIND returned $NC_CALDAV"
+
+# SUITECRM_URL env var present in nc-int-app
+if docker exec nc-int-app env 2>/dev/null | grep -q 'SUITECRM_URL='; then
+  pass "INT-13: SUITECRM_URL env var present in nc-int-app"
+else
+  fail "INT-13: SUITECRM_URL env var missing in nc-int-app"
+fi
+
+# nc-int-app can reach nc-int-mock
+if docker exec nc-int-app curl -sf http://nc-int-mock:8080/__admin/health > /dev/null 2>&1; then
+  pass "INT-13: nc-int-app can reach nc-int-mock (WireMock)"
+else
+  fail "INT-13: nc-int-app cannot reach nc-int-mock"
+fi
+
 section "Summary (Lab 06-05)"
 echo "Passed: $PASS | Failed: $FAIL"
 [[ $FAIL -eq 0 ]] && echo "Lab 06-05 PASSED" || { echo "Lab 06-05 FAILED"; exit 1; }
